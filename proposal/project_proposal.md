@@ -83,20 +83,73 @@ The dataset is synthetically generated but designed to require real-world prepro
 
 ---
 
-### 4. Planned AI Components
+### 4. AI Components — Implementation Status
 
 | Component | Status | Description |
 |---|---|---|
-| **Heuristic Feature Selection** | Week 4 | Greedy forward selection — iteratively adds the single feature that yields the largest KNN accuracy gain. Deterministic and fast, but may miss beneficial feature interactions. |
-| **Genetic Algorithm Feature Selection** | Week 4 | Evolutionary search over binary feature masks. Uses tournament-style parent selection, single-point crossover, and bit-flip mutation to explore the combinatorial feature space. Stochastic but capable of discovering non-obvious feature subsets. |
-| **Ensemble Modeling** | Future | Voting and stacking classifiers combining KNN, Random Forest, and SVM to improve robustness. |
-| **Logic-Based Explainability** | Future | Decision-rule extraction to provide human-readable explanations for each classification decision. |
-| **RL Feedback Loop** | Future | Reinforcement-learning layer that learns from support-agent corrections to continuously improve classification accuracy over time. |
+| **Heuristic Feature Selection** | ✅ Complete (Week 4) | Greedy forward selection — iteratively adds the single feature that yields the largest KNN accuracy gain. Deterministic and fast, but may miss beneficial feature interactions. |
+| **Genetic Algorithm Feature Selection** | ✅ Complete (Week 4) | Evolutionary search over binary feature masks. Uses tournament-style parent selection, single-point crossover, and bit-flip mutation to explore the combinatorial feature space. Stochastic but capable of discovering non-obvious feature subsets. |
+| **Voting Ensemble** | ✅ Complete (Week 6) | Custom `VotingEnsemble` class combining KNN, Decision Tree, Random Forest, Logistic Regression, and SVM via hard voting (majority), soft voting (averaged probabilities), and weighted soft voting (accuracy-proportional weights). |
+| **Stacking Ensemble** | ✅ Complete (Week 6) | `StackingClassifier` with 4 base estimators (KNN, Decision Tree, Random Forest, SVM) and Logistic Regression as the meta-learner, trained on 5-fold cross-validated out-of-fold predictions. Learns optimal combination weights from data. |
+| **Logic-Based Explainability** | ✅ Complete (Week 8) | `TicketExplainer` implements a neuro-symbolic pipeline: symbolic keyword and threshold rules verify/override ML predictions, produce a full reasoning trace with matched evidence, and flag tickets for human review when ML and logic strongly disagree. |
+| **RL Feedback Loop** | Planned | Reinforcement-learning layer that learns from support-agent corrections to continuously improve classification accuracy over time. |
 
 ---
 
-### 5. Success Criteria
+### 5. Architecture — Updated (Week 8)
 
-- Pipeline runs end-to-end from raw database to classification results without manual intervention.
-- Both feature-selection methods produce competitive accuracy with significantly fewer features than the full baseline.
-- All preprocessing steps are logged with before/after statistics for auditability.
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Raw Support Tickets                         │
+│           (ticket text + customer data + metadata)              │
+│                    SQLite Database (3 tables)                    │
+└──────────────────────────┬──────────────────────────────────────┘
+                           │
+            ┌──────────────┼──────────────────┐
+            ▼              ▼                  ▼
+    ┌──────────────┐ ┌───────────────┐ ┌──────────────┐
+    │     Text     │ │    Numeric    │ │  Categorical │
+    │Preprocessing │ │ Preprocessing │ │   Encoding   │
+    └──────┬───────┘ └───────┬───────┘ └──────┬───────┘
+           └─────────────────┼────────────────┘
+                             ▼
+             ┌───────────────────────────────┐
+             │       Feature Selection       │
+             │  Heuristic (Greedy Forward)   │
+             │  Genetic Algorithm (GA)       │
+             └───────────────┬───────────────┘
+                             ▼
+             ┌───────────────────────────────┐
+             │       Ensemble Modeling       │
+             │  VotingEnsemble (hard/soft/   │
+             │     weighted)                │
+             │  StackingClassifier (LR meta) │
+             └───────────────┬───────────────┘
+                             ▼
+             ┌───────────────────────────────┐
+             │  Explainability & Reasoning   │
+             │  TicketExplainer              │
+             │  • Symbolic rule evaluation   │
+             │  • ML override (conf ≥ 90%)   │
+             │  • Reasoning trace            │
+             │  • Human-review flagging      │
+             └───────────────┬───────────────┘
+                             ▼
+             ┌───────────────────────────────┐
+             │      Final Classification     │
+             │  department (6 classes)       │
+             │  priority   (4 levels)        │
+             │  + explanation + confidence   │
+             └───────────────────────────────┘
+```
+
+---
+
+### 6. Success Criteria
+
+- Pipeline runs end-to-end from raw database to classification results without manual intervention. ✅
+- Both feature-selection methods produce competitive accuracy with significantly fewer features than the full baseline. ✅
+- All preprocessing steps are logged with before/after statistics for auditability. ✅
+- Voting and stacking ensembles outperform the single-model baseline. ✅
+- Every classification decision is accompanied by a human-readable explanation showing which symbolic rules fired, what evidence triggered them, and the resulting confidence score. ✅
+- Logic layer correctly overrides ML predictions for high-confidence domain rules (security breaches, duplicate charges, escalated tickets). ✅

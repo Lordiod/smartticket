@@ -27,12 +27,13 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, StackingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, classification_report
 
 from voting_classifier import VotingEnsemble
+from logic_explainer import TicketExplainer, print_rule_catalogue
 from scipy.sparse import hstack, csr_matrix
 
 import ssl
@@ -601,6 +602,117 @@ print("""
 ╚══════════════════════════════════════════════════════════╝
 """)
 
+# ══════════════════════════════════════════════════════════════
+# SECTION 13 — Stacking Ensemble Classification
+# ══════════════════════════════════════════════════════════════
+
+print("\n" + "=" * 60)
+print("  STACKING ENSEMBLE: Meta-Learner Classification")
 print("=" * 60)
+
+print("""
+Stacking (stacked generalisation) trains a meta-learner on the
+out-of-fold predictions of the base estimators.  Unlike voting,
+which uses a fixed aggregation rule, the meta-learner *learns*
+how to best combine the base estimators for this specific dataset.
+""")
+
+# Level-0 base estimators (same as voting ensemble)
+stacking_base = [
+    ("KNN", KNeighborsClassifier(n_neighbors=5)),
+    ("DecisionTree", DecisionTreeClassifier(random_state=42, max_depth=15)),
+    ("RandomForest", RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)),
+    ("SVM", SVC(kernel="rbf", probability=True, random_state=42)),
+]
+
+# Level-1 meta-learner
+meta_learner = LogisticRegression(max_iter=1000, random_state=42)
+
+stacking_clf = StackingClassifier(
+    estimators=stacking_base,
+    final_estimator=meta_learner,
+    cv=5,                        # 5-fold cross-val to generate meta-features
+    stack_method="predict_proba",  # pass probabilities to meta-learner
+    n_jobs=-1,
+    passthrough=False,            # meta-learner only sees base predictions
+)
+
+print("Training stacking ensemble (5-fold CV for meta-features)...")
+stacking_clf.fit(X_train, y_train)
+stacking_preds = stacking_clf.predict(X_val)
+stacking_acc = accuracy_score(y_val, stacking_preds)
+
+print(f"Stacking Ensemble Accuracy: {stacking_acc:.4f}")
+print(f"\nStacking Ensemble Classification Report:")
+print(classification_report(y_val, stacking_preds, target_names=le_dept.classes_))
+
+# ══════════════════════════════════════════════════════════════
+# SECTION 14 — Updated Comparison (including Stacking)
+# ══════════════════════════════════════════════════════════════
+
+print("\n" + "=" * 60)
+print("  FULL COMPARISON: All Methods (Updated)")
+print("=" * 60)
+print(f"{'Method':<32} {'Accuracy':<15} {'# Features'}")
+print("-" * 67)
+print(f"{'Baseline KNN (all+TF-IDF)':<32} {baseline_acc:<15.4f} {X_train.shape[1]}")
+print(f"{'Heuristic (Greedy)':<32} {heuristic_score:<15.4f} {sum(heuristic_mask)}")
+print(f"{'Genetic Algorithm':<32} {ga_score:<15.4f} {sum(ga_mask)}")
+print(f"{'Hard Voting Ensemble':<32} {hard_acc:<15.4f} {X_train.shape[1]}")
+print(f"{'Soft Voting Ensemble':<32} {soft_acc:<15.4f} {X_train.shape[1]}")
+print(f"{'Weighted Soft Voting':<32} {weighted_acc:<15.4f} {X_train.shape[1]}")
+print(f"{'Stacking Ensemble':<32} {stacking_acc:<15.4f} {X_train.shape[1]}")
+
+best_acc = max(baseline_acc, hard_acc, soft_acc, weighted_acc, stacking_acc)
+print(f"\nBest ensemble accuracy: {best_acc:.4f}")
+print(f"Improvement over baseline: +{(best_acc - baseline_acc)*100:.2f} percentage points")
+
+# ══════════════════════════════════════════════════════════════
+# SECTION 15 — Explainability & Reasoning Layer (Week 8)
+# ══════════════════════════════════════════════════════════════
+
+print("\n" + "=" * 60)
+print("  EXPLAINABILITY & REASONING LAYER")
+print("=" * 60)
+
+explainer = TicketExplainer(override_threshold=0.90, review_on_disagreement=True)
+
+# Print rule set
+print_rule_catalogue()
+
+# Print interpretability report
+explainer.print_interpretability_report()
+
+# Demo: explain a sample of validation tickets
+print("Running explainability on a sample of validation tickets...")
+
+# Get sample texts from the dataframe (aligned with validation split)
+val_indices = df.index[df.index.isin(
+    df.index[int(len(df) * 0.8):]
+)][:20]
+
+sample_texts = df.loc[val_indices, "ticket_text"].fillna("no description").tolist()[:20]
+sample_ml_depts = [le_dept.inverse_transform([y_val[i]])[0] for i in range(min(20, len(y_val)))]
+sample_ml_prios = ["medium"] * len(sample_texts)  # priority prediction placeholder
+
+explanation_results = explainer.explain_batch(
+    texts=sample_texts,
+    ml_departments=sample_ml_depts,
+    ml_priorities=sample_ml_prios,
+)
+
+# Show first 3 explanations in detail
+print("\n── Detailed Explanations (first 3 samples) ────────────────")
+for i, result in enumerate(explanation_results[:3]):
+    print(f"\n  Ticket {i+1}: {sample_texts[i][:80]}...")
+    print(result.summary())
+    print("  Reasoning trace:")
+    for step in result.reasoning_trace[:6]:
+        print(f"    {step}")
+
+# Batch report
+print("\n" + explainer.generate_batch_report(explanation_results))
+
+print("\n" + "=" * 60)
 print("  Pipeline Complete!")
 print("=" * 60)
