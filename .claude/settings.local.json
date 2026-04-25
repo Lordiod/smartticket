@@ -7,7 +7,9 @@
       "Bash(gh pr create --title 'Add Explainability layer \\(Week 8\\) + stacking ensemble + updated proposal' --body ':*)",
       "Bash(where gh:*)",
       "Bash(cmd /c \"where gh 2>&1\")",
-      "Bash(cmd /c \"dir \\\\\"C:\\\\Users\\\\Lordiod\\\\AppData\\\\Local\\\\GitHub CLI\\\\\" 2>&1 & dir \\\\\"C:\\\\Program Files\\\\GitHub CLI\\\\\" 2>&1\")"
+      "Bash(cmd /c \"dir \\\\\"C:\\\\Users\\\\Lordiod\\\\AppData\\\\Local\\\\GitHub CLI\\\\\" 2>&1 & dir \\\\\"C:\\\\Program Files\\\\GitHub CLI\\\\\" 2>&1\")",
+      "Bash(python -c ':*)",
+      "Bash(python -c \"import sys; [print\\(l.encode\\('ascii','replace'\\).decode\\(\\)\\) for l in sys.stdin]\")"
     ]
   }
 }
