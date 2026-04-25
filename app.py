@@ -20,8 +20,10 @@ from smartticket_core import (
     run_full_pipeline,
     train_all_models,
     predict_single_ticket,
+    explain_single,
     clean_text,
 )
+from logic_explainer import TicketExplainer, RULE_CATALOGUE, DEPARTMENTS, PRIORITIES
 
 # ══════════════════════════════════════════════════════════════
 # Page Config & Global Styles
@@ -250,6 +252,7 @@ with st.sidebar:
             "🗳️ Voting Ensemble",
             "⚔️ Model Arena",
             "🔮 Live Predictor",
+            "🧠 Explainability",
         ],
         label_visibility="collapsed",
     )
@@ -847,5 +850,275 @@ elif page == "🔮 Live Predictor":
                                     yaxis=dict(dtick=1, gridcolor="rgba(255,255,255,0.05)"))
             fig_votes.update_traces(textposition="outside", marker=dict(cornerradius=6))
             st.plotly_chart(fig_votes, use_container_width=True)
+        else:
+            st.warning("Please enter some ticket text first.")
+
+
+# ══════════════════════════════════════════════════════════════
+# PAGE: Explainability & Reasoning Layer
+# ══════════════════════════════════════════════════════════════
+
+elif page == "🧠 Explainability":
+    st.markdown('<p class="section-header">Explainability & Reasoning Layer</p>', unsafe_allow_html=True)
+    st.markdown(
+        "A **logic-based assistant** that integrates with ML predictions — "
+        "providing symbolic rules, human-readable explanations, and optional "
+        "override when high-confidence rules disagree with the model."
+    )
+
+    # ── How it works ──
+    st.markdown("""
+    <div class="glass-card">
+        <div style="display:flex; gap:1.5rem; flex-wrap:wrap; justify-content:center;">
+            <div style="flex:1; min-width:160px; text-align:center;">
+                <span class="vote-badge vote-hard">Transparency</span>
+                <p style="color:#8B8D97; font-size:0.83rem; margin-top:0.5rem;">
+                    Full reasoning trace — which rules fired, what evidence, why.
+                </p>
+            </div>
+            <div style="flex:1; min-width:160px; text-align:center;">
+                <span class="vote-badge vote-soft">Control</span>
+                <p style="color:#8B8D97; font-size:0.83rem; margin-top:0.5rem;">
+                    Domain experts edit rules in minutes, no re-training needed.
+                </p>
+            </div>
+            <div style="flex:1; min-width:160px; text-align:center;">
+                <span class="vote-badge vote-weighted">Override</span>
+                <p style="color:#8B8D97; font-size:0.83rem; margin-top:0.5rem;">
+                    High-confidence rules (≥ 90%) override ML when needed.
+                </p>
+            </div>
+            <div style="flex:1; min-width:160px; text-align:center;">
+                <span class="vote-badge vote-hard">Safety Net</span>
+                <p style="color:#8B8D97; font-size:0.83rem; margin-top:0.5rem;">
+                    ML vs logic disagreements flagged for human review.
+                </p>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Rule catalogue ──
+    st.markdown("---")
+    st.markdown("#### 📋 Symbolic Rule Catalogue")
+
+    rule_tab1, rule_tab2, rule_tab3 = st.tabs(
+        ["Department Rules", "Priority Rules", "Override Rules"]
+    )
+
+    with rule_tab1:
+        dept_rule_data = [
+            {
+                "Rule Name": r["name"],
+                "Target Department": r["targets"],
+                "Base Confidence": f"{r['confidence']:.0%}",
+                "Description": r["explanation"],
+            }
+            for r in RULE_CATALOGUE["department_rules"]
+        ]
+        st.dataframe(pd.DataFrame(dept_rule_data), use_container_width=True, hide_index=True)
+
+    with rule_tab2:
+        prio_rule_data = [
+            {
+                "Rule Name": r["name"],
+                "Target Priority": r["targets"],
+                "Base Confidence": f"{r['confidence']:.0%}",
+                "Description": r["explanation"],
+            }
+            for r in RULE_CATALOGUE["priority_rules"]
+        ]
+        st.dataframe(pd.DataFrame(prio_rule_data), use_container_width=True, hide_index=True)
+
+    with rule_tab3:
+        override_data = [
+            {
+                "Rule Name": r["name"],
+                "Forces Department": r["forces_dept"] or "—",
+                "Forces Priority": r["forces_priority"] or "—",
+                "Confidence": f"{r['confidence']:.0%}",
+                "Description": r["explanation"],
+            }
+            for r in RULE_CATALOGUE["override_rules"]
+        ]
+        st.dataframe(pd.DataFrame(override_data), use_container_width=True, hide_index=True)
+
+    # ── Live explanation demo ──
+    st.markdown("---")
+    st.markdown("#### 🔍 Live Explanation Demo")
+    st.markdown(
+        "Enter a ticket below and pick the ML model's predicted department. "
+        "The logic layer will explain the decision, show which rules fired, "
+        "and override the ML prediction if a high-confidence rule disagrees."
+    )
+
+    col_text, col_ctrl = st.columns([3, 1])
+
+    with col_text:
+        explain_examples = {
+            "Select an example...": ("", "general", "low"),
+            "Security breach": (
+                "My account has been hacked! Someone changed my email and I can't log in. Please help immediately!",
+                "technical", "medium",
+            ),
+            "Duplicate charge": (
+                "I was charged twice for order #45231. The duplicate charge of $49.99 on my credit card is unauthorized.",
+                "billing", "low",
+            ),
+            "Lost package": (
+                "My order #90123 was supposed to arrive 5 days ago but I never received it. Tracking shows delivered.",
+                "shipping", "medium",
+            ),
+            "App crash": (
+                "The app keeps crashing on my iPhone with error code ERR-5432. Tried reinstalling three times.",
+                "technical", "low",
+            ),
+            "Return request": (
+                "I'd like to return the wireless headphones I bought last week. They stopped working after 2 days.",
+                "returns", "medium",
+            ),
+            "General inquiry": (
+                "Hi, just wondering if you offer gift wrapping? Also do you ship to Australia? Thanks!",
+                "general", "low",
+            ),
+        }
+        selected_ex = st.selectbox("Quick examples", options=list(explain_examples.keys()), key="explain_ex")
+        ex_text, ex_ml_dept, ex_ml_prio = explain_examples[selected_ex]
+        explain_text = st.text_area(
+            "Ticket text",
+            value=ex_text,
+            height=110,
+            placeholder="Describe a support issue...",
+            key="explain_text",
+        )
+
+    with col_ctrl:
+        st.markdown("**ML Prediction (simulated)**")
+        ml_dept_input = st.selectbox(
+            "ML Department",
+            options=DEPARTMENTS,
+            index=DEPARTMENTS.index(ex_ml_dept) if ex_ml_dept in DEPARTMENTS else 0,
+            key="ml_dept_sel",
+        )
+        ml_prio_input = st.selectbox(
+            "ML Priority",
+            options=PRIORITIES,
+            index=PRIORITIES.index(ex_ml_prio) if ex_ml_prio in PRIORITIES else 1,
+            key="ml_prio_sel",
+        )
+        escalated = st.checkbox("Escalated ticket", value=False)
+        num_replies = st.number_input("# Replies", min_value=0, max_value=20, value=0, step=1)
+
+    if st.button("🧠 Explain Classification", type="primary", use_container_width=True):
+        if explain_text.strip():
+            metadata = {"escalated": int(escalated), "num_replies": int(num_replies)}
+            result = explain_single(
+                text=explain_text,
+                ml_department=ml_dept_input,
+                ml_priority=ml_prio_input,
+                metadata=metadata,
+            )
+
+            # ── Decision cards ──
+            st.markdown("")
+            st.markdown("#### Decision")
+            d1, d2, d3, d4 = st.columns(4)
+
+            def src_color(src):
+                if "override" in src:
+                    return "#FFAA00"
+                if "logic" in src:
+                    return "#00D68F"
+                return "#6C63FF"
+
+            d1.metric("ML Department", ml_dept_input.capitalize())
+            d2.metric(
+                "Final Department",
+                result.final_department.capitalize(),
+                delta="overridden" if "override" in result.dept_source else "confirmed",
+                delta_color="inverse" if "override" in result.dept_source else "normal",
+            )
+            d3.metric("ML Priority", ml_prio_input.capitalize())
+            d4.metric(
+                "Final Priority",
+                result.final_priority.capitalize(),
+                delta="overridden" if "override" in result.priority_source else "confirmed",
+                delta_color="inverse" if "override" in result.priority_source else "normal",
+            )
+
+            # Confidence gauges
+            st.markdown("")
+            c1, c2 = st.columns(2)
+            with c1:
+                fig_gauge_dept = go.Figure(go.Indicator(
+                    mode="gauge+number",
+                    value=result.dept_confidence * 100,
+                    title={"text": f"Dept Confidence ({result.dept_source})"},
+                    gauge={
+                        "axis": {"range": [0, 100]},
+                        "bar": {"color": src_color(result.dept_source)},
+                        "steps": [
+                            {"range": [0, 50], "color": "rgba(255,107,107,0.2)"},
+                            {"range": [50, 75], "color": "rgba(255,170,0,0.2)"},
+                            {"range": [75, 100], "color": "rgba(0,214,143,0.2)"},
+                        ],
+                        "threshold": {"line": {"color": "white", "width": 2}, "value": 90},
+                    },
+                    number={"suffix": "%"},
+                ))
+                fig_gauge_dept.update_layout(**PLOTLY_LAYOUT, height=260)
+                st.plotly_chart(fig_gauge_dept, use_container_width=True)
+
+            with c2:
+                fig_gauge_prio = go.Figure(go.Indicator(
+                    mode="gauge+number",
+                    value=result.priority_confidence * 100,
+                    title={"text": f"Priority Confidence ({result.priority_source})"},
+                    gauge={
+                        "axis": {"range": [0, 100]},
+                        "bar": {"color": src_color(result.priority_source)},
+                        "steps": [
+                            {"range": [0, 50], "color": "rgba(255,107,107,0.2)"},
+                            {"range": [50, 75], "color": "rgba(255,170,0,0.2)"},
+                            {"range": [75, 100], "color": "rgba(0,214,143,0.2)"},
+                        ],
+                        "threshold": {"line": {"color": "white", "width": 2}, "value": 90},
+                    },
+                    number={"suffix": "%"},
+                ))
+                fig_gauge_prio.update_layout(**PLOTLY_LAYOUT, height=260)
+                st.plotly_chart(fig_gauge_prio, use_container_width=True)
+
+            # ── Human review flag ──
+            if result.needs_human_review:
+                st.warning(f"⚠️ **Human Review Required:** {result.review_reason}")
+            else:
+                st.success("✅ Classification confidence is sufficient for automatic routing.")
+
+            # ── Rules fired ──
+            st.markdown("#### Rules Fired")
+            if result.rules_fired:
+                rules_df_data = [
+                    {
+                        "Type": r.rule_type,
+                        "Rule": r.rule_name,
+                        "Conclusion": r.conclusion,
+                        "Confidence": f"{r.confidence:.0%}",
+                        "Evidence": ", ".join(r.matched_evidence[:3]) if r.matched_evidence else "—",
+                        "Explanation": r.explanation,
+                    }
+                    for r in result.rules_fired
+                ]
+                st.dataframe(pd.DataFrame(rules_df_data), use_container_width=True, hide_index=True)
+            else:
+                st.info("No symbolic rules matched this ticket. ML prediction used as-is.")
+
+            # ── Full reasoning trace ──
+            with st.expander("📜 Full Reasoning Trace", expanded=False):
+                for step in result.reasoning_trace:
+                    prefix = step.split("]")[0] + "]" if "]" in step else ""
+                    colors_map = {"[DEPT": "#38BDF8", "[PRIO": "#A78BFA", "[OVER": "#FFAA00", "[FINA": "#00D68F", "[FLAG": "#FF6B6B"}
+                    color = next((v for k, v in colors_map.items() if step.startswith(k)), "#E4E6EB")
+                    st.markdown(f'<span style="color:{color}; font-family:monospace; font-size:0.85rem;">{step}</span>', unsafe_allow_html=True)
         else:
             st.warning("Please enter some ticket text first.")

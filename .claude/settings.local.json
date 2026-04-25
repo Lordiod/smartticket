@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python database/generate_database.py)",
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\('database/smartticket.db'\\); print\\(conn.execute\\(\\\\\"SELECT name FROM sqlite_master WHERE type='table'\\\\\"\\).fetchall\\(\\)\\); print\\('tickets:', conn.execute\\('SELECT COUNT\\(*\\) FROM tickets'\\).fetchone\\(\\)\\); conn.close\\(\\)\")",
+      "Bash(python -c \"import os; path='C:/Users/Lordiod/Desktop/smartticket/.claude/worktrees/zealous-almeida/database/smartticket.db'; print\\('exists:', os.path.exists\\(path\\)\\); print\\('size:', os.path.getsize\\(path\\) if os.path.exists\\(path\\) else 'N/A'\\)\")",
+      "Bash(gh pr create --title 'Add Explainability layer \\(Week 8\\) + stacking ensemble + updated proposal' --body ':*)",
+      "Bash(where gh:*)",
+      "Bash(cmd /c \"where gh 2>&1\")",
+      "Bash(cmd /c \"dir \\\\\"C:\\\\Users\\\\Lordiod\\\\AppData\\\\Local\\\\GitHub CLI\\\\\" 2>&1 & dir \\\\\"C:\\\\Program Files\\\\GitHub CLI\\\\\" 2>&1\")"
+    ]
+  }
+}

@@ -22,7 +22,7 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestClassifier, StackingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -43,6 +43,7 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 
 from voting_classifier import VotingEnsemble
+from logic_explainer import TicketExplainer, ExplanationResult
 
 np.random.seed(42)
 random.seed(42)
@@ -320,6 +321,103 @@ def train_all_models(X_train, X_val, y_train, y_val, le_dept):
         "weights": dict(zip([n for n, _ in base_estimators], weight_values)),
         "classes": classes,
     }
+
+
+def train_stacking_model(X_train, X_val, y_train, y_val, le_dept):
+    """
+    Train a stacking ensemble classifier and return evaluation results.
+
+    Stacking (stacked generalisation) trains a meta-learner (Logistic Regression)
+    on out-of-fold predictions from the base estimators, allowing it to *learn*
+    the optimal way to combine the base classifiers for this dataset.
+
+    Returns
+    -------
+    dict with keys: accuracy, predictions, report, confusion, model
+    """
+    stacking_base = [
+        ("KNN", KNeighborsClassifier(n_neighbors=5)),
+        ("Decision Tree", DecisionTreeClassifier(random_state=42, max_depth=15)),
+        ("Random Forest", RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)),
+        ("SVM", SVC(kernel="rbf", probability=True, random_state=42)),
+    ]
+    meta_learner = LogisticRegression(max_iter=1000, random_state=42)
+
+    clf = StackingClassifier(
+        estimators=stacking_base,
+        final_estimator=meta_learner,
+        cv=5,
+        stack_method="predict_proba",
+        n_jobs=-1,
+        passthrough=False,
+    )
+    clf.fit(X_train, y_train)
+    preds = clf.predict(X_val)
+    acc = accuracy_score(y_val, preds)
+    classes = le_dept.classes_
+
+    return {
+        "accuracy": acc,
+        "predictions": preds,
+        "report": classification_report(y_val, preds, target_names=classes, output_dict=True),
+        "confusion": confusion_matrix(y_val, preds),
+        "model": clf,
+    }
+
+
+def explain_tickets(
+    texts,
+    ml_departments=None,
+    ml_priorities=None,
+    metadata_list=None,
+    override_threshold=0.90,
+):
+    """
+    Run the logic-based explainability layer on a list of tickets.
+
+    Parameters
+    ----------
+    texts : list of str
+        Raw ticket text strings.
+    ml_departments : list of str or None
+        ML-predicted department labels (aligned with texts).
+    ml_priorities : list of str or None
+        ML-predicted priority labels (aligned with texts).
+    metadata_list : list of dict or None
+        Optional per-ticket metadata dicts.
+    override_threshold : float
+        Confidence threshold above which logic overrides ML (default 0.90).
+
+    Returns
+    -------
+    list of ExplanationResult
+    """
+    explainer = TicketExplainer(
+        override_threshold=override_threshold,
+        review_on_disagreement=True,
+    )
+    return explainer.explain_batch(
+        texts=texts,
+        ml_departments=ml_departments,
+        ml_priorities=ml_priorities,
+        metadata_list=metadata_list,
+    )
+
+
+def explain_single(text, ml_department=None, ml_priority=None, metadata=None):
+    """
+    Explain a single ticket classification using the logic layer.
+
+    Returns an ExplanationResult with the final department/priority,
+    confidence scores, rules that fired, and a full reasoning trace.
+    """
+    explainer = TicketExplainer(override_threshold=0.90, review_on_disagreement=True)
+    return explainer.explain(
+        text=text,
+        ml_department=ml_department,
+        ml_priority=ml_priority,
+        metadata=metadata or {},
+    )
 
 
 def predict_single_ticket(text, pipeline_data, models_result):
