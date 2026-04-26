@@ -121,7 +121,7 @@ Heuristic (Greedy)        0.8116          8
 Genetic Algorithm         0.7026          21
 ```
 
-Both feature selection methods outperformed the baseline while using far fewer features. The heuristic approach achieved the best result — **81.16% accuracy with just 8 features** — demonstrating that a small set of well-chosen features beats a massive noisy feature space for KNN classification.
+Both feature selection methods outperformed the baseline while using far fewer features. The heuristic approach achieved the best result — **~81.16% accuracy with just 8 features** — demonstrating that a small set of well-chosen features beats a massive noisy feature space for KNN classification.
 
 ---
 
