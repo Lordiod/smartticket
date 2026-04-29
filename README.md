@@ -17,6 +17,9 @@ Customer support teams receive hundreds of tickets daily. Manually routing them 
    - Heuristic greedy forward selection
    - Genetic algorithm (evolutionary search)
 5. **Classifying** tickets with KNN and comparing accuracy across methods
+6. **Explaining** every prediction with two post-hoc, model-agnostic XAI techniques:
+   - **LIME** — local linear surrogate fit on word-level perturbations
+   - **SHAP** — Shapley values over the TF-IDF feature space
 
 ---
 
@@ -163,4 +166,6 @@ Both produce identical output. Charts are saved to `outputs/`.
 - **NLTK** — stopword removal, lemmatization
 - **scipy** — sparse matrix operations
 - **matplotlib / seaborn** — visualization
+- **lime / shap** — post-hoc, model-agnostic explainability (word-level attributions)
+- **streamlit / plotly** — interactive dashboard
 - **SQLite** — data storage

@@ -43,7 +43,7 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 
 from voting_classifier import VotingEnsemble
-from logic_explainer import TicketExplainer, ExplanationResult
+from logic_explainer import MLExplainer, ExplanationResult
 
 np.random.seed(42)
 random.seed(42)
@@ -365,58 +365,114 @@ def train_stacking_model(X_train, X_val, y_train, y_val, le_dept):
     }
 
 
+def build_ml_explainer(pipeline_data, models_result, model_key="weighted_voting"):
+    """
+    Construct an MLExplainer (LIME + SHAP) over a trained SmartTicket pipeline.
+
+    Parameters
+    ----------
+    pipeline_data : dict
+        Output of run_full_pipeline() — must contain ``tfidf``, ``le_dept``.
+    models_result : dict
+        Output of train_all_models() — must contain the chosen model under
+        ``model_key`` with a fitted estimator at ``["model"]``.
+    model_key : str
+        Which trained model to explain (default "weighted_voting").
+
+    Returns
+    -------
+    MLExplainer
+    """
+    model = models_result[model_key]["model"]
+    tfidf = pipeline_data["tfidf"]
+    class_names = list(pipeline_data["le_dept"].classes_)
+
+    n_numeric = len(pipeline_data["all_numeric"])
+    n_ohe = len(pipeline_data["ohe_cols"])
+
+    def feature_builder(texts):
+        cleaned = [
+            " ".join(LEMMATIZER.lemmatize(w) for w in clean_text(t).split() if w not in STOP_WORDS)
+            for t in texts
+        ]
+        X_tfidf = tfidf.transform(cleaned)
+        zeros_num = csr_matrix(np.zeros((len(cleaned), n_numeric)))
+        zeros_ohe = csr_matrix(np.zeros((len(cleaned), n_ohe)))
+        return hstack([X_tfidf, zeros_num, zeros_ohe])
+
+    return MLExplainer(
+        model=model,
+        tfidf=tfidf,
+        class_names=class_names,
+        feature_builder=feature_builder,
+    )
+
+
 def explain_tickets(
     texts,
-    ml_departments=None,
-    ml_priorities=None,
-    metadata_list=None,
-    override_threshold=0.90,
+    pipeline_data,
+    models_result,
+    model_key="weighted_voting",
+    background_texts=None,
+    num_features=10,
+    nsamples_shap=100,
 ):
     """
-    Run the logic-based explainability layer on a list of tickets.
+    Run LIME + SHAP explanations on a batch of tickets.
 
     Parameters
     ----------
     texts : list of str
         Raw ticket text strings.
-    ml_departments : list of str or None
-        ML-predicted department labels (aligned with texts).
-    ml_priorities : list of str or None
-        ML-predicted priority labels (aligned with texts).
-    metadata_list : list of dict or None
-        Optional per-ticket metadata dicts.
-    override_threshold : float
-        Confidence threshold above which logic overrides ML (default 0.90).
+    pipeline_data : dict
+        Output of run_full_pipeline().
+    models_result : dict
+        Output of train_all_models().
+    model_key : str
+        Which model to explain (default "weighted_voting").
+    background_texts : list of str or None
+        Background sample for SHAP's KernelExplainer.  If None, uses a
+        zero-vector baseline (faster but coarser).
+    num_features : int
+        Number of top features to keep per explanation.
+    nsamples_shap : int
+        SHAP KernelExplainer sample count (higher = more accurate, slower).
 
     Returns
     -------
     list of ExplanationResult
     """
-    explainer = TicketExplainer(
-        override_threshold=override_threshold,
-        review_on_disagreement=True,
-    )
+    explainer = build_ml_explainer(pipeline_data, models_result, model_key)
     return explainer.explain_batch(
         texts=texts,
-        ml_departments=ml_departments,
-        ml_priorities=ml_priorities,
-        metadata_list=metadata_list,
+        background_texts=background_texts,
+        num_features=num_features,
+        nsamples_shap=nsamples_shap,
     )
 
 
-def explain_single(text, ml_department=None, ml_priority=None, metadata=None):
+def explain_single(
+    text,
+    pipeline_data,
+    models_result,
+    model_key="weighted_voting",
+    background_texts=None,
+    num_features=10,
+    nsamples_shap=100,
+):
     """
-    Explain a single ticket classification using the logic layer.
+    Explain a single ticket classification with LIME + SHAP.
 
-    Returns an ExplanationResult with the final department/priority,
-    confidence scores, rules that fired, and a full reasoning trace.
+    Returns
+    -------
+    ExplanationResult
     """
-    explainer = TicketExplainer(override_threshold=0.90, review_on_disagreement=True)
+    explainer = build_ml_explainer(pipeline_data, models_result, model_key)
     return explainer.explain(
         text=text,
-        ml_department=ml_department,
-        ml_priority=ml_priority,
-        metadata=metadata or {},
+        background_texts=background_texts,
+        num_features=num_features,
+        nsamples_shap=nsamples_shap,
     )
 
 

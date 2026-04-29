@@ -33,7 +33,7 @@ from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score, classification_report
 
 from voting_classifier import VotingEnsemble
-from logic_explainer import TicketExplainer, print_rule_catalogue
+from logic_explainer import MLExplainer, generate_batch_report, print_xai_overview
 from scipy.sparse import hstack, csr_matrix
 
 import ssl
@@ -668,37 +668,65 @@ print(f"\nBest ensemble accuracy: {best_acc:.4f}")
 print(f"Improvement over baseline: +{(best_acc - baseline_acc)*100:.2f} percentage points")
 
 # ══════════════════════════════════════════════════════════════
-# SECTION 15 — Explainability & Reasoning Layer (Week 8)
+# SECTION 15 — Post-Hoc Explainability (LIME + SHAP)
 # ══════════════════════════════════════════════════════════════
 
 print("\n" + "=" * 60)
-print("  EXPLAINABILITY & REASONING LAYER")
+print("  POST-HOC EXPLAINABILITY (LIME + SHAP)")
 print("=" * 60)
 
-explainer = TicketExplainer(override_threshold=0.90, review_on_disagreement=True)
+# Print high-level XAI overview
+print_xai_overview()
 
-# Print rule set
-print_rule_catalogue()
+# We explain the weighted soft-voting ensemble (best-performing voter).
+# The explainer needs a feature_builder that turns raw text into a feature
+# row with the same shape the model was trained on (TF-IDF + numeric + OHE).
+n_numeric_xai = len(all_numeric)
+n_ohe_xai = len(ohe_cols)
 
-# Print interpretability report
-explainer.print_interpretability_report()
 
-# Demo: explain a sample of validation tickets
-print("Running explainability on a sample of validation tickets...")
+def _xai_feature_builder(texts):
+    cleaned = []
+    for t in texts:
+        t = re.sub(r"http\S+", "", str(t).lower())
+        t = re.sub(r"\S+@\S+", "", t)
+        t = re.sub(r"&\w+;", "", t)
+        t = re.sub(r"<[^>]+>", "", t)
+        t = re.sub(r"#\d+", "", t)
+        t = re.sub(r"\b\d+\.\d+\.\d+\.\d+\b", "", t)
+        t = re.sub(r"[^a-z\s]", "", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        t = " ".join(w for w in t.split() if w not in stop_words)
+        t = " ".join(lemmatizer.lemmatize(w) for w in t.split())
+        cleaned.append(t)
+    X_tfidf_local = tfidf.transform(cleaned)
+    zeros_num = csr_matrix(np.zeros((len(cleaned), n_numeric_xai)))
+    zeros_ohe = csr_matrix(np.zeros((len(cleaned), n_ohe_xai)))
+    return hstack([X_tfidf_local, zeros_num, zeros_ohe])
 
-# Get sample texts from the dataframe (aligned with validation split)
-val_indices = df.index[df.index.isin(
-    df.index[int(len(df) * 0.8):]
-)][:20]
 
-sample_texts = df.loc[val_indices, "ticket_text"].fillna("no description").tolist()[:20]
-sample_ml_depts = [le_dept.inverse_transform([y_val[i]])[0] for i in range(min(20, len(y_val)))]
-sample_ml_prios = ["medium"] * len(sample_texts)  # priority prediction placeholder
+ml_explainer = MLExplainer(
+    model=weighted_ensemble,
+    tfidf=tfidf,
+    class_names=list(le_dept.classes_),
+    feature_builder=_xai_feature_builder,
+    n_lime_samples=500,        # smaller → faster end-to-end script run
+    n_shap_background=20,
+)
 
-explanation_results = explainer.explain_batch(
+# Demo: explain a sample of validation tickets.
+val_indices = df.index[df.index.isin(df.index[int(len(df) * 0.8):])][:10]
+sample_texts = df.loc[val_indices, "ticket_text"].fillna("no description").tolist()[:10]
+background_texts = df["ticket_text"].dropna().sample(
+    n=min(20, len(df)), random_state=42
+).tolist()
+
+print("\nRunning LIME + SHAP on 10 validation tickets...")
+explanation_results = ml_explainer.explain_batch(
     texts=sample_texts,
-    ml_departments=sample_ml_depts,
-    ml_priorities=sample_ml_prios,
+    background_texts=background_texts,
+    num_features=10,
+    nsamples_shap=50,           # KernelExplainer cost ~ O(nsamples)
 )
 
 # Show first 3 explanations in detail
@@ -706,12 +734,17 @@ print("\n── Detailed Explanations (first 3 samples) ────────
 for i, result in enumerate(explanation_results[:3]):
     print(f"\n  Ticket {i+1}: {sample_texts[i][:80]}...")
     print(result.summary())
-    print("  Reasoning trace:")
-    for step in result.reasoning_trace[:6]:
-        print(f"    {step}")
+    print("  Top LIME words (signed contribution → predicted class):")
+    for word, weight in result.top_words(k=5, source="lime"):
+        sign = "+" if weight >= 0 else "-"
+        print(f"    {sign} {word:<25} {weight:+.3f}")
+    print("  Top SHAP words (Shapley value → predicted class):")
+    for word, weight in result.top_words(k=5, source="shap"):
+        sign = "+" if weight >= 0 else "-"
+        print(f"    {sign} {word:<25} {weight:+.3f}")
 
 # Batch report
-print("\n" + explainer.generate_batch_report(explanation_results))
+print("\n" + generate_batch_report(explanation_results))
 
 print("\n" + "=" * 60)
 print("  Pipeline Complete!")

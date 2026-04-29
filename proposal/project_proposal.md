@@ -91,7 +91,7 @@ The dataset is synthetically generated but designed to require real-world prepro
 | **Genetic Algorithm Feature Selection** | ✅ Complete (Week 4) | Evolutionary search over binary feature masks. Uses tournament-style parent selection, single-point crossover, and bit-flip mutation to explore the combinatorial feature space. Stochastic but capable of discovering non-obvious feature subsets. |
 | **Voting Ensemble** | ✅ Complete (Week 6) | Custom `VotingEnsemble` class combining KNN, Decision Tree, Random Forest, Logistic Regression, and SVM via hard voting (majority), soft voting (averaged probabilities), and weighted soft voting (accuracy-proportional weights). |
 | **Stacking Ensemble** | ✅ Complete (Week 6) | `StackingClassifier` with 4 base estimators (KNN, Decision Tree, Random Forest, SVM) and Logistic Regression as the meta-learner, trained on 5-fold cross-validated out-of-fold predictions. Learns optimal combination weights from data. |
-| **Logic-Based Explainability** | ✅ Complete (Week 8) | `TicketExplainer` implements a neuro-symbolic pipeline: symbolic keyword and threshold rules verify/override ML predictions, produce a full reasoning trace with matched evidence, and flag tickets for human review when ML and logic strongly disagree. |
+| **Post-Hoc Explainability (LIME + SHAP)** | ✅ Complete (Week 8) | `MLExplainer` wraps the trained voting ensemble with two model-agnostic explainers: **LIME** (local linear surrogate fit on text perturbations) and **SHAP** (Shapley values over TF-IDF features via `KernelExplainer`). Each prediction is accompanied by a signed word-level attribution table, plus a global aggregate over a batch of tickets. |
 | **RL Feedback Loop** | Planned | Reinforcement-learning layer that learns from support-agent corrections to continuously improve classification accuracy over time. |
 
 ---
@@ -127,19 +127,19 @@ The dataset is synthetically generated but designed to require real-world prepro
              └───────────────┬───────────────┘
                              ▼
              ┌───────────────────────────────┐
-             │  Explainability & Reasoning   │
-             │  TicketExplainer              │
-             │  • Symbolic rule evaluation   │
-             │  • ML override (conf ≥ 90%)   │
-             │  • Reasoning trace            │
-             │  • Human-review flagging      │
+             │  Post-Hoc Explainability      │
+             │  MLExplainer                  │
+             │  • LIME (local linear fit)    │
+             │  • SHAP (Shapley values)      │
+             │  • Word-level attributions    │
+             │  • Global feature importance  │
              └───────────────┬───────────────┘
                              ▼
              ┌───────────────────────────────┐
              │      Final Classification     │
              │  department (6 classes)       │
              │  priority   (4 levels)        │
-             │  + explanation + confidence   │
+             │  + LIME/SHAP attributions     │
              └───────────────────────────────┘
 ```
 
@@ -151,5 +151,5 @@ The dataset is synthetically generated but designed to require real-world prepro
 - Both feature-selection methods produce competitive accuracy with significantly fewer features than the full baseline. ✅
 - All preprocessing steps are logged with before/after statistics for auditability. ✅
 - Voting and stacking ensembles outperform the single-model baseline. ✅
-- Every classification decision is accompanied by a human-readable explanation showing which symbolic rules fired, what evidence triggered them, and the resulting confidence score. ✅
-- Logic layer correctly overrides ML predictions for high-confidence domain rules (security breaches, duplicate charges, escalated tickets). ✅
+- Every classification decision is accompanied by word-level attributions from both LIME and SHAP, showing which tokens in the ticket pushed the model toward (or against) the predicted class. ✅
+- LIME and SHAP cross-check each other: when both methods agree on the top-contributing words, the explanation is treated as robust; otherwise it is flagged for closer review. ✅

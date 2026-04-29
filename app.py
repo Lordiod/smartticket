@@ -20,10 +20,9 @@ from smartticket_core import (
     run_full_pipeline,
     train_all_models,
     predict_single_ticket,
-    explain_single,
+    build_ml_explainer,
     clean_text,
 )
-from logic_explainer import TicketExplainer, RULE_CATALOGUE, DEPARTMENTS, PRIORITIES
 
 # ══════════════════════════════════════════════════════════════
 # Page Config & Global Styles
@@ -855,270 +854,288 @@ elif page == "🔮 Live Predictor":
 
 
 # ══════════════════════════════════════════════════════════════
-# PAGE: Explainability & Reasoning Layer
+# PAGE: Explainability (LIME + SHAP)
 # ══════════════════════════════════════════════════════════════
 
 elif page == "🧠 Explainability":
-    st.markdown('<p class="section-header">Explainability & Reasoning Layer</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-header">Explainability — LIME + SHAP</p>', unsafe_allow_html=True)
     st.markdown(
-        "A **logic-based assistant** that integrates with ML predictions — "
-        "providing symbolic rules, human-readable explanations, and optional "
-        "override when high-confidence rules disagree with the model."
+        "Two **post-hoc, model-agnostic** explainers wrapped around the trained "
+        "voting ensemble. They tell you *which words* in a ticket pushed the model "
+        "toward its prediction — without ever opening the model's internals."
     )
 
     # ── How it works ──
     st.markdown("""
     <div class="glass-card">
         <div style="display:flex; gap:1.5rem; flex-wrap:wrap; justify-content:center;">
-            <div style="flex:1; min-width:160px; text-align:center;">
-                <span class="vote-badge vote-hard">Transparency</span>
+            <div style="flex:1; min-width:180px; text-align:center;">
+                <span class="vote-badge vote-hard">LIME</span>
                 <p style="color:#8B8D97; font-size:0.83rem; margin-top:0.5rem;">
-                    Full reasoning trace — which rules fired, what evidence, why.
+                    Perturbs the text by dropping words, fits a tiny local linear
+                    model around this prediction.
                 </p>
             </div>
-            <div style="flex:1; min-width:160px; text-align:center;">
-                <span class="vote-badge vote-soft">Control</span>
+            <div style="flex:1; min-width:180px; text-align:center;">
+                <span class="vote-badge vote-soft">SHAP</span>
                 <p style="color:#8B8D97; font-size:0.83rem; margin-top:0.5rem;">
-                    Domain experts edit rules in minutes, no re-training needed.
+                    Computes Shapley values — each word's average marginal
+                    contribution across all feature subsets.
                 </p>
             </div>
-            <div style="flex:1; min-width:160px; text-align:center;">
-                <span class="vote-badge vote-weighted">Override</span>
+            <div style="flex:1; min-width:180px; text-align:center;">
+                <span class="vote-badge vote-weighted">Model-agnostic</span>
                 <p style="color:#8B8D97; font-size:0.83rem; margin-top:0.5rem;">
-                    High-confidence rules (≥ 90%) override ML when needed.
+                    Works with any classifier exposing predict_proba — KNN, RF,
+                    SVM, voting, stacking.
                 </p>
             </div>
-            <div style="flex:1; min-width:160px; text-align:center;">
-                <span class="vote-badge vote-hard">Safety Net</span>
+            <div style="flex:1; min-width:180px; text-align:center;">
+                <span class="vote-badge vote-hard">Cross-check</span>
                 <p style="color:#8B8D97; font-size:0.83rem; margin-top:0.5rem;">
-                    ML vs logic disagreements flagged for human review.
+                    When LIME and SHAP agree on the top words, the explanation
+                    is robust.
                 </p>
             </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    # ── Rule catalogue ──
-    st.markdown("---")
-    st.markdown("#### 📋 Symbolic Rule Catalogue")
+    # ── Build the explainer (cached) ──
+    @st.cache_resource(show_spinner=False)
+    def get_explainer(model_key):
+        return build_ml_explainer(pipeline, models, model_key=model_key)
 
-    rule_tab1, rule_tab2, rule_tab3 = st.tabs(
-        ["Department Rules", "Priority Rules", "Override Rules"]
-    )
-
-    with rule_tab1:
-        dept_rule_data = [
-            {
-                "Rule Name": r["name"],
-                "Target Department": r["targets"],
-                "Base Confidence": f"{r['confidence']:.0%}",
-                "Description": r["explanation"],
-            }
-            for r in RULE_CATALOGUE["department_rules"]
-        ]
-        st.dataframe(pd.DataFrame(dept_rule_data), use_container_width=True, hide_index=True)
-
-    with rule_tab2:
-        prio_rule_data = [
-            {
-                "Rule Name": r["name"],
-                "Target Priority": r["targets"],
-                "Base Confidence": f"{r['confidence']:.0%}",
-                "Description": r["explanation"],
-            }
-            for r in RULE_CATALOGUE["priority_rules"]
-        ]
-        st.dataframe(pd.DataFrame(prio_rule_data), use_container_width=True, hide_index=True)
-
-    with rule_tab3:
-        override_data = [
-            {
-                "Rule Name": r["name"],
-                "Forces Department": r["forces_dept"] or "—",
-                "Forces Priority": r["forces_priority"] or "—",
-                "Confidence": f"{r['confidence']:.0%}",
-                "Description": r["explanation"],
-            }
-            for r in RULE_CATALOGUE["override_rules"]
-        ]
-        st.dataframe(pd.DataFrame(override_data), use_container_width=True, hide_index=True)
+    @st.cache_data(show_spinner=False)
+    def get_background_texts():
+        return df_raw["ticket_text"].dropna().sample(
+            n=min(20, len(df_raw)), random_state=42
+        ).tolist()
 
     # ── Live explanation demo ──
     st.markdown("---")
     st.markdown("#### 🔍 Live Explanation Demo")
     st.markdown(
-        "Enter a ticket below and pick the ML model's predicted department. "
-        "The logic layer will explain the decision, show which rules fired, "
-        "and override the ML prediction if a high-confidence rule disagrees."
+        "Pick a model, enter a ticket, and the explainer will run **LIME + SHAP** "
+        "to reveal which words drove the prediction."
     )
 
     col_text, col_ctrl = st.columns([3, 1])
 
     with col_text:
         explain_examples = {
-            "Select an example...": ("", "general", "low"),
+            "Select an example...": "",
             "Security breach": (
-                "My account has been hacked! Someone changed my email and I can't log in. Please help immediately!",
-                "technical", "medium",
+                "My account has been hacked! Someone changed my email and I can't log in. Please help immediately!"
             ),
             "Duplicate charge": (
-                "I was charged twice for order #45231. The duplicate charge of $49.99 on my credit card is unauthorized.",
-                "billing", "low",
+                "I was charged twice for order #45231. The duplicate charge of $49.99 on my credit card is unauthorized."
             ),
             "Lost package": (
-                "My order #90123 was supposed to arrive 5 days ago but I never received it. Tracking shows delivered.",
-                "shipping", "medium",
+                "My order #90123 was supposed to arrive 5 days ago but I never received it. Tracking shows delivered."
             ),
             "App crash": (
-                "The app keeps crashing on my iPhone with error code ERR-5432. Tried reinstalling three times.",
-                "technical", "low",
+                "The app keeps crashing on my iPhone with error code ERR-5432. Tried reinstalling three times."
             ),
             "Return request": (
-                "I'd like to return the wireless headphones I bought last week. They stopped working after 2 days.",
-                "returns", "medium",
+                "I'd like to return the wireless headphones I bought last week. They stopped working after 2 days."
             ),
             "General inquiry": (
-                "Hi, just wondering if you offer gift wrapping? Also do you ship to Australia? Thanks!",
-                "general", "low",
+                "Hi, just wondering if you offer gift wrapping? Also do you ship to Australia? Thanks!"
             ),
         }
-        selected_ex = st.selectbox("Quick examples", options=list(explain_examples.keys()), key="explain_ex")
-        ex_text, ex_ml_dept, ex_ml_prio = explain_examples[selected_ex]
+
+        # When the example dropdown changes, push the new text into the
+        # text-area's session_state slot BEFORE the widget is rendered.
+        # (Setting `value=` on text_area only takes effect on first render
+        # when the widget has a `key`.)
+        def _on_example_change():
+            picked = st.session_state.get("explain_ex_select", "")
+            st.session_state["explain_text"] = explain_examples.get(picked, "")
+
+        st.selectbox(
+            "Quick examples",
+            options=list(explain_examples.keys()),
+            key="explain_ex_select",
+            on_change=_on_example_change,
+        )
         explain_text = st.text_area(
             "Ticket text",
-            value=ex_text,
             height=110,
             placeholder="Describe a support issue...",
             key="explain_text",
         )
 
     with col_ctrl:
-        st.markdown("**ML Prediction (simulated)**")
-        ml_dept_input = st.selectbox(
-            "ML Department",
-            options=DEPARTMENTS,
-            index=DEPARTMENTS.index(ex_ml_dept) if ex_ml_dept in DEPARTMENTS else 0,
-            key="ml_dept_sel",
+        st.markdown("**Explainer settings**")
+        # LIME and SHAP both need predict_proba — only soft-probability
+        # models are explainable.  Hard voting emits labels only.
+        model_choice = st.selectbox(
+            "Model to explain",
+            options=[
+                ("Weighted Soft Voting", "weighted_voting"),
+                ("Soft Voting", "soft_voting"),
+            ],
+            format_func=lambda kv: kv[0],
+            key="model_choice",
         )
-        ml_prio_input = st.selectbox(
-            "ML Priority",
-            options=PRIORITIES,
-            index=PRIORITIES.index(ex_ml_prio) if ex_ml_prio in PRIORITIES else 1,
-            key="ml_prio_sel",
+        st.caption(
+            "Hard voting is excluded — LIME/SHAP both require "
+            "probability outputs."
         )
-        escalated = st.checkbox("Escalated ticket", value=False)
-        num_replies = st.number_input("# Replies", min_value=0, max_value=20, value=0, step=1)
+        num_features = st.slider(
+            "Top features per method", min_value=5, max_value=20, value=10, step=1
+        )
+        nsamples_shap = st.slider(
+            "SHAP samples (more = slower, more accurate)",
+            min_value=30, max_value=200, value=80, step=10,
+        )
 
     if st.button("🧠 Explain Classification", type="primary", use_container_width=True):
         if explain_text.strip():
-            metadata = {"escalated": int(escalated), "num_replies": int(num_replies)}
-            result = explain_single(
-                text=explain_text,
-                ml_department=ml_dept_input,
-                ml_priority=ml_prio_input,
-                metadata=metadata,
-            )
+            with st.spinner("Running LIME + SHAP — this can take 5–20 s..."):
+                explainer = get_explainer(model_choice[1])
+                background_texts = get_background_texts()
+                result = explainer.explain(
+                    text=explain_text,
+                    background_texts=background_texts,
+                    num_features=num_features,
+                    nsamples_shap=nsamples_shap,
+                )
 
-            # ── Decision cards ──
+            # ── Prediction header ──
             st.markdown("")
-            st.markdown("#### Decision")
-            d1, d2, d3, d4 = st.columns(4)
+            st.markdown("#### Prediction")
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Model", model_choice[0])
+            p2.metric("Predicted department", result.predicted_label.capitalize())
+            p3.metric("Confidence", f"{result.predicted_confidence:.1%}")
 
-            def src_color(src):
-                if "override" in src:
-                    return "#FFAA00"
-                if "logic" in src:
-                    return "#00D68F"
-                return "#6C63FF"
-
-            d1.metric("ML Department", ml_dept_input.capitalize())
-            d2.metric(
-                "Final Department",
-                result.final_department.capitalize(),
-                delta="overridden" if "override" in result.dept_source else "confirmed",
-                delta_color="inverse" if "override" in result.dept_source else "normal",
-            )
-            d3.metric("ML Priority", ml_prio_input.capitalize())
-            d4.metric(
-                "Final Priority",
-                result.final_priority.capitalize(),
-                delta="overridden" if "override" in result.priority_source else "confirmed",
-                delta_color="inverse" if "override" in result.priority_source else "normal",
-            )
-
-            # Confidence gauges
+            # ── Class probability bars ──
             st.markdown("")
-            c1, c2 = st.columns(2)
-            with c1:
-                fig_gauge_dept = go.Figure(go.Indicator(
-                    mode="gauge+number",
-                    value=result.dept_confidence * 100,
-                    title={"text": f"Dept Confidence ({result.dept_source})"},
-                    gauge={
-                        "axis": {"range": [0, 100]},
-                        "bar": {"color": src_color(result.dept_source)},
-                        "steps": [
-                            {"range": [0, 50], "color": "rgba(255,107,107,0.2)"},
-                            {"range": [50, 75], "color": "rgba(255,170,0,0.2)"},
-                            {"range": [75, 100], "color": "rgba(0,214,143,0.2)"},
-                        ],
-                        "threshold": {"line": {"color": "white", "width": 2}, "value": 90},
-                    },
-                    number={"suffix": "%"},
-                ))
-                fig_gauge_dept.update_layout(**PLOTLY_LAYOUT, height=260)
-                st.plotly_chart(fig_gauge_dept, use_container_width=True)
-
-            with c2:
-                fig_gauge_prio = go.Figure(go.Indicator(
-                    mode="gauge+number",
-                    value=result.priority_confidence * 100,
-                    title={"text": f"Priority Confidence ({result.priority_source})"},
-                    gauge={
-                        "axis": {"range": [0, 100]},
-                        "bar": {"color": src_color(result.priority_source)},
-                        "steps": [
-                            {"range": [0, 50], "color": "rgba(255,107,107,0.2)"},
-                            {"range": [50, 75], "color": "rgba(255,170,0,0.2)"},
-                            {"range": [75, 100], "color": "rgba(0,214,143,0.2)"},
-                        ],
-                        "threshold": {"line": {"color": "white", "width": 2}, "value": 90},
-                    },
-                    number={"suffix": "%"},
-                ))
-                fig_gauge_prio.update_layout(**PLOTLY_LAYOUT, height=260)
-                st.plotly_chart(fig_gauge_prio, use_container_width=True)
-
-            # ── Human review flag ──
-            if result.needs_human_review:
-                st.warning(f"⚠️ **Human Review Required:** {result.review_reason}")
-            else:
-                st.success("✅ Classification confidence is sufficient for automatic routing.")
-
-            # ── Rules fired ──
-            st.markdown("#### Rules Fired")
-            if result.rules_fired:
-                rules_df_data = [
-                    {
-                        "Type": r.rule_type,
-                        "Rule": r.rule_name,
-                        "Conclusion": r.conclusion,
-                        "Confidence": f"{r.confidence:.0%}",
-                        "Evidence": ", ".join(r.matched_evidence[:3]) if r.matched_evidence else "—",
-                        "Explanation": r.explanation,
-                    }
-                    for r in result.rules_fired
+            st.markdown("#### Class probabilities")
+            prob_df = pd.DataFrame(
+                [
+                    {"Class": cls, "Probability": prob}
+                    for cls, prob in sorted(
+                        result.class_probabilities.items(),
+                        key=lambda kv: -kv[1],
+                    )
                 ]
-                st.dataframe(pd.DataFrame(rules_df_data), use_container_width=True, hide_index=True)
-            else:
-                st.info("No symbolic rules matched this ticket. ML prediction used as-is.")
+            )
+            fig_probs = px.bar(
+                prob_df, x="Class", y="Probability",
+                color="Class", color_discrete_sequence=PALETTE,
+                text=prob_df["Probability"].map(lambda v: f"{v:.1%}"),
+            )
+            fig_probs.update_layout(
+                **PLOTLY_LAYOUT, height=320, showlegend=False,
+                yaxis=dict(range=[0, 1], gridcolor="rgba(255,255,255,0.05)"),
+            )
+            fig_probs.update_traces(textposition="outside", marker=dict(cornerradius=6))
+            st.plotly_chart(fig_probs, use_container_width=True)
 
-            # ── Full reasoning trace ──
-            with st.expander("📜 Full Reasoning Trace", expanded=False):
-                for step in result.reasoning_trace:
-                    prefix = step.split("]")[0] + "]" if "]" in step else ""
-                    colors_map = {"[DEPT": "#38BDF8", "[PRIO": "#A78BFA", "[OVER": "#FFAA00", "[FINA": "#00D68F", "[FLAG": "#FF6B6B"}
-                    color = next((v for k, v in colors_map.items() if step.startswith(k)), "#E4E6EB")
-                    st.markdown(f'<span style="color:{color}; font-family:monospace; font-size:0.85rem;">{step}</span>', unsafe_allow_html=True)
+            # ── LIME / SHAP bar charts side-by-side ──
+            st.markdown("---")
+            st.markdown(f"#### Word-level attributions — *{result.predicted_label}*")
+
+            def attribution_bar(contribs, title, accent_pos, accent_neg):
+                rows = [
+                    {"Feature": c.feature, "Weight": c.weight, "AbsWeight": c.abs_weight}
+                    for c in contribs
+                ]
+                if not rows:
+                    return None
+                cdf = pd.DataFrame(rows).sort_values("AbsWeight", ascending=True)
+                colors = [accent_pos if w >= 0 else accent_neg for w in cdf["Weight"]]
+                fig = go.Figure(go.Bar(
+                    x=cdf["Weight"],
+                    y=cdf["Feature"],
+                    orientation="h",
+                    marker=dict(color=colors, cornerradius=4),
+                    text=[f"{w:+.3f}" for w in cdf["Weight"]],
+                    textposition="outside",
+                ))
+                fig.update_layout(
+                    **PLOTLY_LAYOUT,
+                    title=dict(text=title, font=dict(size=15)),
+                    height=max(280, 32 * len(cdf) + 80),
+                    xaxis=dict(title="Contribution toward predicted class",
+                               gridcolor="rgba(255,255,255,0.05)",
+                               zeroline=True, zerolinecolor="rgba(255,255,255,0.3)"),
+                    yaxis=dict(title=""),
+                    showlegend=False,
+                )
+                return fig
+
+            l_col, s_col = st.columns(2)
+            with l_col:
+                fig_lime = attribution_bar(
+                    result.lime_contributions,
+                    "LIME — local linear weights",
+                    accent_pos="#00D68F", accent_neg="#FF6B6B",
+                )
+                if fig_lime is not None:
+                    st.plotly_chart(fig_lime, use_container_width=True)
+                    st.caption(
+                        f"Local-fit R² = {result.lime_local_r2:.3f} · "
+                        f"intercept = {result.lime_intercept:+.3f}"
+                    )
+                else:
+                    st.info("LIME found no informative words.")
+
+            with s_col:
+                fig_shap = attribution_bar(
+                    result.shap_contributions,
+                    "SHAP — Shapley values",
+                    accent_pos="#6C63FF", accent_neg="#FFAA00",
+                )
+                if fig_shap is not None:
+                    st.plotly_chart(fig_shap, use_container_width=True)
+                    st.caption(
+                        f"Base value = {result.shap_base_value:+.3f}"
+                    )
+                else:
+                    st.info("SHAP found no non-zero contributions.")
+
+            # ── Agreement between LIME and SHAP ──
+            st.markdown("#### LIME vs SHAP agreement")
+            lime_words = {c.feature for c in result.lime_contributions}
+            shap_words = {c.feature for c in result.shap_contributions}
+            common = lime_words & shap_words
+            only_lime = lime_words - shap_words
+            only_shap = shap_words - lime_words
+
+            agree_df = pd.DataFrame({
+                "Source": ["Both", "LIME only", "SHAP only"],
+                "Count": [len(common), len(only_lime), len(only_shap)],
+                "Words": [
+                    ", ".join(sorted(common)) or "—",
+                    ", ".join(sorted(only_lime)) or "—",
+                    ", ".join(sorted(only_shap)) or "—",
+                ],
+            })
+            st.dataframe(agree_df, use_container_width=True, hide_index=True)
+
+            if len(lime_words) > 0 and len(common) / max(len(lime_words), 1) >= 0.5:
+                st.success(
+                    f"✅ LIME and SHAP agree on {len(common)} of the top words — "
+                    "the explanation is robust."
+                )
+            else:
+                st.warning(
+                    "⚠️ LIME and SHAP show limited overlap — interpret with care."
+                )
+
+            # ── Raw class probability table ──
+            with st.expander("📜 Full class probabilities", expanded=False):
+                prob_table = pd.DataFrame([
+                    {"Class": c, "Probability": f"{p:.4f}"}
+                    for c, p in sorted(
+                        result.class_probabilities.items(),
+                        key=lambda kv: -kv[1],
+                    )
+                ])
+                st.dataframe(prob_table, use_container_width=True, hide_index=True)
         else:
             st.warning("Please enter some ticket text first.")
