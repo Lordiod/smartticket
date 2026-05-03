@@ -24,6 +24,36 @@ from smartticket_core import (
     clean_text,
 )
 
+
+# ══════════════════════════════════════════════════════════════
+# Database Initialization (auto-generate if missing)
+# ══════════════════════════════════════════════════════════════
+
+@st.cache_resource
+def ensure_database_exists():
+    """Initialize database if it doesn't exist yet."""
+    db_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "database", "smartticket.db"
+    )
+    
+    if not os.path.exists(db_path):
+        st.info("🔄 Generating database on first run... This may take ~10 seconds.")
+        try:
+            # Import and run the database generator
+            sys.path.insert(0, os.path.join(os.path.dirname(__file__), "database"))
+            from database.generate_database import main
+            main()
+            st.success("✅ Database created successfully!")
+        except Exception as e:
+            st.error(f"❌ Failed to generate database: {e}")
+            st.stop()
+    
+    return db_path
+
+
+# Ensure database exists before running any queries
+ensure_database_exists()
+
 # ══════════════════════════════════════════════════════════════
 # Page Config & Global Styles
 # ══════════════════════════════════════════════════════════════
